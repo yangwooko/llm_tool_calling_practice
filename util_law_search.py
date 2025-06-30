@@ -5,6 +5,7 @@ import inspect
 import os
 from dotenv import load_dotenv
 import psycopg2
+from util_tool_call import SimpleToolCaller
 
 # .env 파일 로드
 load_dotenv()
@@ -26,6 +27,50 @@ class LawSearcher:
             self.search_results_dict = {}
             self.current_index = 0
             self.last_query = query
+
+            # LLM을 사용하여 질문에 법령 이름이 있다면 추출합니다.
+            messages = [
+                {
+                    "role": "system",
+                    "content": """다음 문장에서 모든 법률명을 추출해줘. 만약 문장에 법률, 시행령, 시행규칙, 자치법규, 행정규칙에 대한 명시적인 언급이 없으면 법률명에 "해당없음"으로 응답을 해. 행정규칙은 "건축공사 감리세부기준"처럼 ~기준으로 된 경우도 있으니 이것도 법률명으로 인식해야해.
+
+문장: "정원의 조성 및 진흥에 관한 법률 제18의14조와 개인정보 보호법 제5조를 설명해줘."
+법률: 
+1. 법률명: "정원의 조성 및 진흥에 관한 법률"
+2. 법률명: "개인정보 보호법"
+
+문장: "전기공사업법 시행규칙 별지 제16호 서식을 알려줘."
+법률: 
+1. 법률명: "전기공사업법 시행규칙"
+
+문장: "건축공사 감리세부기준 2.5.6 안전관리"
+법률: 
+1. 법률명: "건축공사 감리세부기준"
+
+문장: "정보통신망 이용촉진 및 정보보호 등에 관한 법률 제32조 제3항, 공공기관의 정보공개에 관한 법률 제9조를 알려줘."
+법률: 
+1. 법률명: "정보통신망 이용촉진 및 정보보호 등에 관한 법률"
+2. 법률명: "공공기관의 정보공개에 관한 법률"
+
+문장: "도로교통법과 소득세법 제56조에 대해 설명해줘."
+법률: 
+1. 법률명: "도로교통법"
+2. 법률명: "소득세법"
+
+문장: "건설사업관리기술인의 설계단계 업무 중 설계검토 계획에 대해 알려줘."
+법률: 
+1. 법률명: "해당없음"
+""",
+                },
+                {"role": "user", "content": f"문장: {query}"},
+            ]
+
+            # SimpleToolCaller 인스턴스 생성
+            caller = SimpleToolCaller()
+
+            # chat 메서드 호출 (tool calling 없이)
+            law_name = caller.chat(messages, with_tools=False)
+            print("🔍 LAW NAME-->", law_name)
 
             # execute sql
             # SELECT ch2.id, ch2.text, ch2.meta, document.document_meta, paradedb.score(ch2.id) similarity
@@ -123,21 +168,23 @@ def check_law_sufficiency(law_content: str, user_question: str) -> str:
     ]
 
     try:
-        # SimpleToolCaller 인스턴스 생성 (LLM 호출용)
-        load_dotenv()
-        if USE_OPENAI:
-            caller = SimpleToolCaller(os.getenv("OPENAI_API_KEY"))
+        # 직접 LLM 호출 (tool calling 없이)
+        headers = {
+            "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
+            "Content-Type": "application/json",
+        }
+
+        data = {"model": "gpt-3.5-turbo", "messages": messages, "temperature": 0.7}
+
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions", headers=headers, json=data
+        )
+
+        if response.status_code == 200:
+            judgment = response.json()["choices"][0]["message"]["content"]
+            return f"충분성 판단 결과: {judgment}"
         else:
-            model = "Qwen/Qwen3-32B-AWQ"
-            base_url = "https://5c86-109-61-127-28.ngrok-free.app/v1"
-            api_key = "EMPTY"
-            caller = SimpleToolCaller(api_key, base_url, model)
-
-        # LLM 호출하여 충분성 판단
-        response = caller.call_llm(messages)
-        judgment = response["choices"][0]["message"]["content"]
-
-        return f"충분성 판단 결과: {judgment}"
+            return f"API 호출 실패: {response.status_code} - {response.text}"
 
     except Exception as e:
         return f"충분성 판단 중 오류가 발생했습니다: {str(e)}"
@@ -164,11 +211,11 @@ def find_relevant_laws(user_question: str, max_search_count: int = 10) -> str:
                 print(f"🔍 LAW SEARCH ERROR: {law_result['error']}")
                 break
 
-            print(
-                "🔍 LAW RESULT(from search_laws)-->",
-                law_result["document_meta"]["path"],
-                law_result["meta"],
-            )
+            # print(
+            #     "🔍 LAW RESULT(from search_laws)-->",
+            #     law_result["document_meta"]["path"],
+            #     law_result["meta"],
+            # )
 
             # 법령 내용 추출
             law_content = law_result.get("text", "")
@@ -204,82 +251,47 @@ def find_relevant_laws(user_question: str, max_search_count: int = 10) -> str:
                     }
                 )
 
-        # 결과 정리
-        result_summary = f"""
-=== 법령 검색 및 검토 결과 ===
-검색한 법령 수: {search_count}개
-충분한 법령 수: {len([law for law in relevant_laws if "충분함" in law["sufficiency"]])}개
-부분적 충분한 법령 수: {len([law for law in relevant_laws if "부분적 충분함" in law["sufficiency"]])}개
-부족한 법령 수: {len(insufficient_laws)}개
+        #         # 결과 정리
+        #         result_summary = f"""
+        # === 법령 검색 및 검토 결과 ===
+        # 검색한 법령 수: {search_count}개
+        # 충분한 법령 수: {len([law for law in relevant_laws if "충분함" in law["sufficiency"]])}개
+        # 부분적 충분한 법령 수: {len([law for law in relevant_laws if "부분적 충분함" in law["sufficiency"]])}개
+        # 부족한 법령 수: {len(insufficient_laws)}개
 
-=== 충분한 법령들 ===
-"""
+        # === 충분한 법령들 ===
+        # """
 
-        for i, law in enumerate(relevant_laws, 1):
-            result_summary += f"""
-법령 {i}:
-text: {law["result"]["text"]}
-meta: {law["result"]["meta"]}
-path: {law["result"]["document_meta"]["path"]}
-충분성: {law["sufficiency"]}
-"""
+        #         for i, law in enumerate(relevant_laws, 1):
+        #             result_summary += f"""
+        # 법령 {i}:
+        # text: {law["result"]["text"]}
+        # meta: {law["result"]["meta"]}
+        # path: {law["result"]["document_meta"]["path"]}
+        # 충분성: {law["sufficiency"]}
+        # """
 
-        if insufficient_laws:
-            result_summary += "\n=== 부족한 법령들 ===\n"
-            for i, law in enumerate(insufficient_laws, 1):
-                result_summary += f"""
-법령 {i}:
-text: {law["result"]["text"]}
-meta: {law["result"]["meta"]}
-path: {law["result"]["document_meta"]["path"]}
-충분성: {law["sufficiency"]}
-"""
+        #         if insufficient_laws:
+        #             result_summary += "\n=== 부족한 법령들 ===\n"
+        #             for i, law in enumerate(insufficient_laws, 1):
+        #                 result_summary += f"""
+        # 법령 {i}:
+        # text: {law["result"]["text"]}
+        # meta: {law["result"]["meta"]}
+        # path: {law["result"]["document_meta"]["path"]}
+        # 충분성: {law["sufficiency"]}
+        # """
 
         if not relevant_laws:
-            result_summary += "\n⚠️ 충분한 법령을 찾지 못했습니다. 다른 키워드로 검색하거나 더 구체적인 질문을 해보세요."
+            return "\n⚠️ 충분한 법령을 찾지 못했습니다. 다른 키워드로 검색하거나 더 구체적인 질문을 해보세요."
 
+        result_summary = ""
+        for law in relevant_laws:
+            result_summary += f"""
+            {law["result"]["document_meta"]["path"]}
+            {law["sufficiency"]}
+            """
         return result_summary
 
     except Exception as e:
         return f"법령 검색 및 검토 중 오류가 발생했습니다: {str(e)}"
-
-
-def main():
-    """메인 함수 - 예시 실행"""
-    # .env 파일 로드
-    load_dotenv()
-
-    # SimpleToolCaller 인스턴스 생성
-    if USE_OPENAI:
-        caller = SimpleToolCaller(os.getenv("OPENAI_API_KEY"))
-    else:
-        model = "Qwen/Qwen3-32B-AWQ"
-        base_url = "https://5c86-109-61-127-28.ngrok-free.app/v1"
-        api_key = "EMPTY"
-        caller = SimpleToolCaller(api_key, base_url, model)
-
-    # 예시 질문들
-    test_questions = [
-        # "서울의 날씨는 어때?",
-        # "2 + 3 * 4를 계산해줘",
-        # "최신 AI 기술 동향에 대해 검색해줘",
-        # "윤석열의 특검 조사에 대해 검색해서 결과를 요약해줘",
-        # "부산 날씨와 10 + 5 계산을 해줘",
-        # "건축법에서 정의하는 경미한 설계변경에 대해 알려줘",
-        "건축법에서 대통령령으로 정하는 경미한 변경에 대해 알려줘",
-    ]
-
-    print("=== LLM Tool Calling 예시 ===\n")
-
-    for question in test_questions:
-        print(f"질문: {question}")
-        try:
-            answer = caller.chat_with_tools(question)
-            print(f"답변: {answer}")
-        except Exception as e:
-            print(f"오류: {e}")
-        print("-" * 50)
-
-
-if __name__ == "__main__":
-    main()
