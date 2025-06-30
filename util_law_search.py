@@ -6,6 +6,7 @@ import os
 from dotenv import load_dotenv
 import psycopg2
 from util_tool_call import SimpleToolCaller
+import re
 
 # .env 파일 로드
 load_dotenv()
@@ -19,6 +20,56 @@ class LawSearcher:
         self.current_index = 0
         self.last_query = None
 
+    def extract_first_number(self, text):
+        if text == "조항 번호 없음":
+            return None
+
+        # 특정 문자열 패턴을 먼저 찾음 (예: "별표" 또는 "부칙"으로 시작하는 경우)
+        special_pattern = r"^(별표|별지|부칙)\d+"
+        special_match = re.match(special_pattern, text)
+
+        # 특정 문자열 패턴에 매칭되면 해당 문자열 반환
+        if special_match:
+            return special_match.group()
+
+        # 일반 숫자만 추출하는 패턴
+        match = re.search(r"\d+", text)
+        if match:
+            return match.group()
+
+        # 아무것도 매칭되지 않으면 None 반환
+        return None
+
+    def parse_law_results(self, text):
+        # 맨 앞에 법률과 조항: 이 있으면 무시
+        text = text.split("법률과 조항:")[1].strip()
+        # 앞에 \n 등이 있으면 제거
+        text = text.lstrip("\n")
+        print("🔍 TEXT-->", text)
+        # 정규 표현식을 사용하여 법률명과 조항 번호 추출
+        pattern = r'법률명:\s*"([^"]+)",\s*조항 번호:\s*"([^"]+)"'
+        print("🔍 PATTERN-->", 1)
+
+        # 정규 표현식으로 모든 매칭된 결과를 찾음
+        matches = re.findall(pattern, text)
+        print("🔍 PATTERN-->", 2)
+
+        # 결과를 저장할 리스트 초기화
+        result_list = []
+        print("🔍 PATTERN-->", 3)
+
+        # 매칭된 결과를 순회하며 리스트에 딕셔너리 형태로 추가
+        for match in matches:
+            print("🔍 MATCH-->", match)
+            law_info = {
+                "법률명": match[0],
+                "조항 번호": self.extract_first_number(match[1]),
+            }
+            result_list.append(law_info)
+
+        print("🔍 RESULT LIST-->", result_list)
+        return result_list
+
     def search_laws(self, query: str) -> Dict[str, Any]:
         """질문에 관련된 법령들을 검색합니다. 호출할 때마다 다음 결과를 반환합니다."""
         # 새로운 쿼리인 경우 검색 수행
@@ -29,37 +80,45 @@ class LawSearcher:
             self.last_query = query
 
             # LLM을 사용하여 질문에 법령 이름이 있다면 추출합니다.
-            messages = [
+            messages_law_name = [
                 {
                     "role": "system",
-                    "content": """다음 문장에서 모든 법률명을 추출해줘. 만약 문장에 법률, 시행령, 시행규칙, 자치법규, 행정규칙에 대한 명시적인 언급이 없으면 법률명에 "해당없음"으로 응답을 해. 행정규칙은 "건축공사 감리세부기준"처럼 ~기준으로 된 경우도 있으니 이것도 법률명으로 인식해야해.
+                    "content": """다음 문장에서 모든 법률명과 조항 번호를 각각 추출해줘. 각 법률명과 조항 번호를 순서대로 추출하고, 조항 번호가 없는 경우에는 "조항 번호 없음"으로 표시해줘. 만약 질문에 법률, 시행령, 시행규칙, 자치법규, 행정규칙에 대한 명시적인 언급이 없으면 법률명에 "해당없음"으로 응답을 해. 행정규칙은 "건축공사 감리세부기준"처럼 ~기준으로 된 경우도 있으니 이것도 법률명으로 인식해야해.
 
 문장: "정원의 조성 및 진흥에 관한 법률 제18의14조와 개인정보 보호법 제5조를 설명해줘."
-법률: 
-1. 법률명: "정원의 조성 및 진흥에 관한 법률"
-2. 법률명: "개인정보 보호법"
+법률과 조항: 
+1. 법률명: "정원의 조성 및 진흥에 관한 법률", 조항 번호: "제18의14조"
+2. 법률명: "개인정보 보호법", 조항 번호: "제5조"
 
 문장: "전기공사업법 시행규칙 별지 제16호 서식을 알려줘."
-법률: 
-1. 법률명: "전기공사업법 시행규칙"
+법률과 조항: 
+1. 법률명: "전기공사업법 시행규칙", 조항 번호: "별지16호"
 
 문장: "건축공사 감리세부기준 2.5.6 안전관리"
-법률: 
-1. 법률명: "건축공사 감리세부기준"
+법률과 조항: 
+1. 법률명: "건축공사 감리세부기준", 조항 번호: "2.5.6 안전관리"
 
 문장: "정보통신망 이용촉진 및 정보보호 등에 관한 법률 제32조 제3항, 공공기관의 정보공개에 관한 법률 제9조를 알려줘."
-법률: 
-1. 법률명: "정보통신망 이용촉진 및 정보보호 등에 관한 법률"
-2. 법률명: "공공기관의 정보공개에 관한 법률"
+법률과 조항: 
+1. 법률명: "정보통신망 이용촉진 및 정보보호 등에 관한 법률", 조항 번호: "제32조 제3항"
+2. 법률명: "공공기관의 정보공개에 관한 법률", 조항 번호: "제9조"
 
 문장: "도로교통법과 소득세법 제56조에 대해 설명해줘."
-법률: 
-1. 법률명: "도로교통법"
-2. 법률명: "소득세법"
+법률과 조항: 
+1. 법률명: "도로교통법", 조항 번호: "조항 번호 없음"
+2. 법률명: "소득세법", 조항 번호: "제56조"
 
 문장: "건설사업관리기술인의 설계단계 업무 중 설계검토 계획에 대해 알려줘."
-법률: 
-1. 법률명: "해당없음"
+법률과 조항: 
+1. 법률명: "해당없음", 조항 번호: "해당없음"
+""",
+                },
+                {"role": "user", "content": f"문장: {query}\n법률과 조항: "},
+            ]
+            messages_keyword = [
+                {
+                    "role": "system",
+                    "content": """다음 문장에서 검색에 사용할 키워드를 추출해줘. 키워드는 법령 이름이 아니라 법령 내용에서 찾고자 하는 주요 키워드를 추출해줘. 의미를 유지하면서도 불필요한 단어 또는 검색 대상에서 제외해야 할 단어는 제거해야 합니다. 단, 질문 속에 의미가 유사한 단어가 등장하는 경우에는 어느 단어로 검색해야 매칭이 더 좋을지 모르므로 모두 포함해주세요. 명사 위주로 추출하세요.
 """,
                 },
                 {"role": "user", "content": f"문장: {query}"},
@@ -68,9 +127,29 @@ class LawSearcher:
             # SimpleToolCaller 인스턴스 생성
             caller = SimpleToolCaller()
 
-            # chat 메서드 호출 (tool calling 없이)
-            law_name = caller.chat(messages, with_tools=False)
-            print("🔍 LAW NAME-->", law_name)
+            # 질문에 법령 이름이 포함된 경우 추출
+            law_name_result = caller.chat(messages_law_name, with_tools=False)
+            print("🔍 LAW NAME RESULT-->", law_name_result)
+            print("-" * 100)
+            law_name_parsed = self.parse_law_results(law_name_result)
+            print("+" * 100)
+            print("🔍 LAW NAME PARSED-->", law_name_parsed)
+
+            # 질문에서 찾고자 하는 주요 키워드 추출
+            keyword = caller.chat(messages_keyword, with_tools=False)
+            # 맨 앞에 키워드: 가 있으면 제거
+            if keyword.startswith("키워드:"):
+                keyword = keyword[len("키워드:") :]
+            # 결과를 리스트로 변환
+            keyword = keyword.split(",")
+            keyword = [keyword.strip() for keyword in keyword]
+            # 키워드 중 법률명이 포함된 경우 제거
+            keyword = [
+                keyword
+                for keyword in keyword
+                if keyword not in law_name_parsed[0]["법률명"]
+            ]
+            print("🔍 KEYWORD-->", keyword)
 
             # execute sql
             # SELECT ch2.id, ch2.text, ch2.meta, document.document_meta, paradedb.score(ch2.id) similarity
@@ -80,9 +159,10 @@ class LawSearcher:
             sql_query = f"""
             SELECT ch2.id, ch2.text, ch2.meta, document.document_meta, paradedb.score(ch2.id) similarity
             FROM document JOIN collection cl ON document.collection_id = cl.id join chunk ch2 on ch2.document_id = document.id join embedding_all ea on ea.chunk_id = ch2.id
-            WHERE cl.usage = 'rag' AND (cl.scenario->>'law_no_ordin' = 'Y')  AND (NOT document.collection_id = 4 AND document.document_meta->>'path' NOT ILIKE '/data/law/ordin/%') and keyword1='건축법' and ((text @@@ '경미 변경'))
+            WHERE cl.usage = 'rag' AND (cl.scenario->>'law_no_ordin' = 'Y')  AND (NOT document.collection_id = 4 AND document.document_meta->>'path' NOT ILIKE '/data/law/ordin/%') and keyword1='{law_name_parsed[0]["법률명"]}' and ((text @@@ '{" ".join(keyword)}'))
             ORDER BY paradedb.score(ch2.id) desc LIMIT 80;
             """
+            print("🔍 SQL QUERY-->", sql_query)
             try:
                 db = psycopg2.connect(
                     host=os.getenv("POSTGRES_HOST"),
@@ -112,7 +192,10 @@ class LawSearcher:
             return {"error": f"'{query}'에 대한 검색 결과가 없습니다."}
 
         # 리스트로 변환
+        # print("🔍 SEARCH RESULTS DICT-->", self.search_results_dict)
         self.search_results = list(self.search_results_dict.values())
+        # print("🔍 SEARCH RESULTS-->", self.search_results)
+        print(f"{self.current_index=} {len(self.search_results)=}")
 
         # 현재 인덱스가 범위를 벗어난 경우
         if self.current_index >= len(self.search_results):
