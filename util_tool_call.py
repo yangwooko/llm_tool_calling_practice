@@ -3,6 +3,11 @@ import requests
 from typing import List, Dict, Any, Callable
 import inspect
 import os
+from dotenv import load_dotenv
+from prompts import generate_prompt
+
+# .env 파일 로드
+load_dotenv()
 
 
 class SimpleToolCaller:
@@ -12,7 +17,8 @@ class SimpleToolCaller:
         if os.getenv("USE_OPENAI") == "True":
             self.api_key = os.getenv("OPENAI_API_KEY")
             self.base_url = "https://api.openai.com/v1"
-            self.model = "gpt-3.5-turbo"
+            # self.model = "gpt-3.5-turbo"
+            self.model = "gpt-4o-mini-2024-07-18"
         else:
             self.api_key = "EMPTY"
             self.base_url = "https://5c86-109-61-127-28.ngrok-free.app/v1"
@@ -56,13 +62,8 @@ class SimpleToolCaller:
         """도구를 사용하여 대화합니다."""
         # 시스템 프롬프트로 시작하지 않으면 시스템 프롬프트를 추가합니다.
         if messages[0]["role"] != "system":
-            messages.insert(
-                0,
-                {
-                    "role": "system",
-                    "content": "당신은 도구를 사용할 수 있는 AI 어시스턴트입니다. 필요할 때 적절한 도구를 사용하세요. 질문에 포함된 단어(예를 들어, 도시명)를 다른 언어로 번역하지 말고 질문에 있는 그대로 사용하세요.",
-                },
-            )
+            system_messages = generate_prompt("system")
+            messages = system_messages + messages
 
         # 첫 번째 LLM 호출
         if with_tools:

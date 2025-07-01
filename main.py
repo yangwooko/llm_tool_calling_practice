@@ -11,31 +11,6 @@ from util_law_search import find_relevant_laws
 
 # 도구 정의
 TOOLS = [
-    # {
-    #     "type": "function",
-    #     "function": {
-    #         "name": "find_relevant_laws",
-    #         "description": "주어진 질문과 관련된 법령을 찾고 하나씩 검토하여 관련된 법령을 추려냅니다. search_laws와 check_law_sufficiency를 자동으로 연속 호출하여 최적의 법령들을 찾습니다.",
-    #         "parameters": {
-    #             "type": "object",
-    #             "properties": {
-    #                 "user_question": {
-    #                     "type": "string",
-    #                     "description": "검색할 사용자 질문",
-    #                     "examples": [
-    #                         "건축법에서 정의하는 경미한 설계변경에 대해 알려줘",
-    #                     ],
-    #                 },
-    #                 "max_search_count": {
-    #                     "type": "integer",
-    #                     "description": "최대 검색할 법령 수 (기본값: 5)",
-    #                     "default": 5,
-    #                 },
-    #             },
-    #             "required": ["user_question"],
-    #         },
-    #     },
-    # },
     {
         "type": "function",
         "function": {
@@ -61,47 +36,6 @@ TOOLS = [
             },
         },
     },
-    # {
-    #     "type": "function",
-    #     "function": {
-    #         "name": "search_laws",
-    #         "description": "질문에 관련된 법령을 검색하여 한번에 하나씩 리턴합니다. 같은 질문을 검색하면 검색 결과에서 다음 법령을 리턴합니다. 더 이상 검색 결과가 없으면 더 이상 검색 결과가 없습니다. 라고 리턴합니다.",
-    #         "parameters": {
-    #             "type": "object",
-    #             "properties": {
-    #                 "query": {
-    #                     "type": "string",
-    #                     "description": "검색할 질문",
-    #                     "examples": [
-    #                         "건축법에서 정의하는 경미한 설계변경에 대해 알려줘",
-    #                     ],
-    #                 }
-    #             },
-    #             "required": ["query"],
-    #         },
-    #     },
-    # },
-    # {
-    #     "type": "function",
-    #     "function": {
-    #         "name": "check_law_sufficiency",
-    #         "description": "LLM을 사용하여 법령 내용이 사용자 질문에 답변하기에 충분한지 판단합니다.",
-    #         "parameters": {
-    #             "type": "object",
-    #             "properties": {
-    #                 "law_content": {
-    #                     "type": "string",
-    #                     "description": "판단할 법령 내용",
-    #                 },
-    #                 "user_question": {
-    #                     "type": "string",
-    #                     "description": "사용자의 원래 질문",
-    #                 },
-    #             },
-    #             "required": ["law_content", "user_question"],
-    #         },
-    #     },
-    # },
     {
         "type": "function",
         "function": {
@@ -180,8 +114,6 @@ TOOL_FUNCTIONS = {
     "get_weather": get_weather,
     "calculate_math": calculate_math,
     "google_search": google_search,
-    # "search_laws": search_laws,
-    # "check_law_sufficiency": check_law_sufficiency,
     "find_relevant_laws": find_relevant_laws,
 }
 
@@ -201,7 +133,7 @@ def main():
         # "최신 AI 기술 동향에 대해 검색해줘",
         # "윤석열의 특검 조사에 대해 검색해서 결과를 요약해줘",
         # "부산 날씨와 10 + 5 계산을 해줘",
-        "건축법에서 정의하는 경미한 변경에 대해 알려줘",
+        "건축법에서 정의하는 경미한 사항의 변경에 대해 알려줘",
     ]
 
     print("=== LLM Tool Calling 예시 ===\n")
