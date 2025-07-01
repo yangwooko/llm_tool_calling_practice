@@ -37,7 +37,7 @@ class DatabaseManager:
             for user in result["results"]:
                 print(f"ID: {user['id']}, Name: {user['name']}, Email: {user['email']}")
         """
-        print("🔍 SQL QUERY-->", sql_query)
+        # print("🔍 SQL QUERY-->", sql_query)
         try:
             db = self._get_connection()
             cursor = db.cursor()
@@ -116,8 +116,8 @@ class DatabaseManager:
             for user in result["results"]:
                 print(f"User: {user}")
         """
-        print("🔍 SQL QUERY-->", sql_query)
-        print("🔍 PARAMS-->", params)
+        # print("🔍 SQL QUERY-->", sql_query)
+        # print("🔍 PARAMS-->", params)
         try:
             db = self._get_connection()
             cursor = db.cursor()
