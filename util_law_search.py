@@ -101,8 +101,12 @@ class LawSearcher:
         law_name_no_space = law_name_parsed[0]["법률명"].replace(" ", "")
 
         # execute sql
-        sql_query = f"""SELECT ch2.id FROM document JOIN collection cl ON document.collection_id = cl.id JOIN chunk ch2 ON ch2.document_id = document.id WHERE cl.usage = 'rag' AND (cl.scenario->>'law_no_ordin' = 'Y')  AND (NOT document.collection_id = 4  AND document.document_meta->>'path' NOT ILIKE '/data/law/ordin/%') AND keyword1='{law_name_no_space}'  AND ((text @@@ '{" ".join(keyword)}')) ORDER BY paradedb.score(ch2.id) desc LIMIT 80;
-        """
+        if law_name_no_space == "해당없음":
+            sql_query = f"""SELECT ch2.id FROM document JOIN collection cl ON document.collection_id = cl.id JOIN chunk ch2 ON ch2.document_id = document.id WHERE cl.usage = 'rag' AND (cl.scenario->>'law_no_ordin' = 'Y')  AND (NOT document.collection_id = 4  AND document.document_meta->>'path' NOT ILIKE '/data/law/ordin/%') AND ((text @@@ '{" ".join(keyword)}')) ORDER BY paradedb.score(ch2.id) desc LIMIT 20;
+            """
+        else:
+            sql_query = f"""SELECT ch2.id FROM document JOIN collection cl ON document.collection_id = cl.id JOIN chunk ch2 ON ch2.document_id = document.id WHERE cl.usage = 'rag' AND (cl.scenario->>'law_no_ordin' = 'Y')  AND (NOT document.collection_id = 4  AND document.document_meta->>'path' NOT ILIKE '/data/law/ordin/%') AND keyword1='{law_name_no_space}'  AND ((text @@@ '{" ".join(keyword)}')) ORDER BY paradedb.score(ch2.id) desc LIMIT 20;
+            """
 
         return db_manager.execute_query(sql_query)
 
@@ -119,24 +123,53 @@ class LawSearcher:
 
 
 # 법령 내용 충분성 검사 함수 (LLM 기반)
-def check_law_sufficiency(law_content: str, user_question: str) -> str:
-    """LLM을 사용하여 법령 내용이 사용자 질문에 답변하기에 충분한지 판단합니다."""
+def check_law_sufficiency(law_contents: List[str], user_question: str) -> List[str]:
+    """LLM을 사용하여 여러 법령 내용이 사용자 질문에 답변하기에 충분한지 판단합니다."""
     try:
         # SimpleToolCaller 인스턴스 생성
         caller = SimpleToolCaller()
+
+        # LLM에게 각 청크별로 판단하도록 요청
         result = caller.chat(
             generate_prompt(
-                "law_sufficiency", law_content=law_content, user_question=user_question
+                "batch_law_sufficiency",
+                law_contents=law_contents,
+                user_question=user_question,
             ),
             with_tools=False,
         )
-        return result
+        print("🔍 BATCH LAW SUFFICIENCY RESULT-->", result)
+
+        # 결과 파싱
+        results = []
+        lines = result.strip().split("\n")
+
+        for i, line in enumerate(lines):
+            if f"{i+1}번 법령:" in line:
+                if "충분함" in line:
+                    results.append("충분함")
+                elif "부분적 충분함" in line:
+                    results.append("부분적 충분함")
+                else:
+                    results.append("부족함")
+            else:
+                # 파싱 실패 시 기본값
+                results.append("부족함")
+
+        # 결과 개수가 청크 개수와 맞지 않으면 기본값으로 채움
+        while len(results) < len(law_contents):
+            results.append("부족함")
+
+        return results[: len(law_contents)]
+
     except Exception as e:
         print(f"충분성 검사 오류: {e}")
-        return "검사 중 오류가 발생했습니다."
+        return ["검사 중 오류가 발생했습니다."] * len(law_contents)
 
 
-def search_and_analyze_laws(query: str, user_question: str) -> List[str]:
+def search_and_analyze_laws(
+    query: str, user_question: str, batch_size: int = 10
+) -> Dict[str, Any]:
     """질문에 관련된 법령을 검색하고 충분성을 검사하여 관련된 법령들을 반환합니다."""
     relevant_laws = []
 
@@ -152,20 +185,31 @@ def search_and_analyze_laws(query: str, user_question: str) -> List[str]:
             print("검색 결과가 없습니다.")
             return {"error": None, "results": relevant_laws}
 
-        # 각 법령 내용을 분석
+        # 법령 내용을 배치 단위로 가져오기
+        law_contents = []
         for law_result_id in law_result_ids["results"]:
             law_content = LawSearcher().get_law_content_by_id(law_result_id["id"])
+            if "error" not in law_content:
+                law_contents.extend(law_content["results"])
 
-            if "error" in law_content:
-                continue
+        # 배치 단위로 충분성 검사 수행
+        for i in range(0, len(law_contents), batch_size):
+            batch = law_contents[i : i + batch_size]
 
-            # 충분성 검사
-            sufficiency_result = check_law_sufficiency(
-                law_content["results"], user_question
-            )
+            # 배치 전체를 한번에 충분성 검사
+            sufficiency_results = check_law_sufficiency(batch, user_question)
+            print("🔍 SUFFICIENCY RESULTS-->", sufficiency_results)
 
-            if "충분함" in sufficiency_result or "부분적 충분함" in sufficiency_result:
-                relevant_laws.extend(law_content["results"])
+            # 각 청크별 결과에 따라 relevant_laws에 추가
+            for j, (law_content, sufficiency_result) in enumerate(
+                zip(batch, sufficiency_results)
+            ):
+                if (
+                    "충분함" in sufficiency_result
+                    or "부분적 충분함" in sufficiency_result
+                ):
+                    print("🔍 ADDING LAW CONTENT-->", law_content)
+                    relevant_laws.append(law_content)
 
         return {"error": None, "results": relevant_laws}
 
@@ -175,57 +219,131 @@ def search_and_analyze_laws(query: str, user_question: str) -> List[str]:
 
 
 def check_additional_search_needed(
-    law_content: str, user_question: str, current_law_name: str = ""
-) -> Dict[str, Any]:
-    """법령 내용을 분석하여 사용자 질문에 답하기 위해 추가 검색이 필요한지 판단합니다."""
+    law_contents: List[str], user_question: str, current_law_name: str = ""
+) -> List[Dict[str, Any]]:
+    """여러 법령 내용을 분석하여 사용자 질문에 답하기 위해 추가 검색이 필요한지 판단합니다."""
     try:
         # SimpleToolCaller 인스턴스 생성
         caller = SimpleToolCaller()
-        result = caller.chat(
+
+        # # 여러 청크를 구분자로 연결
+        # combined_content = "\n\n---\n\n".join(law_contents)
+
+        # result = caller.chat(
+        #     generate_prompt(
+        #         "additional_search",
+        #         law_content=combined_content,
+        #         user_question=user_question,
+        #     ),
+        #     with_tools=False,
+        # )
+
+        # 결과 파싱 - 각 청크별로 추가 검색 필요성 판단
+        results = []
+
+        # LLM에게 각 청크별로 판단하도록 요청
+        batch_result = caller.chat(
             generate_prompt(
-                "additional_search",
-                law_content=law_content,
+                "batch_additional_search",
+                law_contents=law_contents,
                 user_question=user_question,
             ),
             with_tools=False,
         )
 
         # 결과 파싱
-        if "추가 검색 필요" in result:
-            # 검색 대상과 키워드 추출
-            search_target = ""
-            search_keywords = ""
-            search_reason = ""
+        lines = batch_result.strip().split("\n")
+        current_law_index = -1
+        current_search_target = ""
+        current_search_keywords = ""
+        current_search_reason = ""
 
-            lines = result.split("\n")
-            for line in lines:
-                if "검색 대상:" in line:
-                    search_target = line.split("검색 대상:")[1].strip()
-                elif "검색 키워드:" in line:
-                    search_keywords = line.split("검색 키워드:")[1].strip()
-                elif "검색 이유:" in line:
-                    search_reason = line.split("검색 이유:")[1].strip()
+        for line in lines:
+            # 새로운 법령 시작 확인
+            for i in range(len(law_contents)):
+                if f"{i+1}번 법령:" in line:
+                    # 이전 법령의 결과 저장
+                    if current_law_index >= 0:
+                        if "추가 검색 필요" in lines[current_law_index]:
+                            results.append(
+                                {
+                                    "needs_additional_search": True,
+                                    "search_target": current_search_target
+                                    or (
+                                        current_law_name + " 시행령"
+                                        if current_law_name
+                                        else ""
+                                    ),
+                                    "search_keywords": current_search_keywords,
+                                    "search_reason": current_search_reason
+                                    or "법령 내용에서 추가 검색이 필요함",
+                                    "full_result": lines[current_law_index],
+                                }
+                            )
+                        else:
+                            results.append(
+                                {
+                                    "needs_additional_search": False,
+                                    "full_result": lines[current_law_index],
+                                }
+                            )
 
-            # "대통령령"을 현재 법에 따른 시행령으로 변환
-            if search_target == "대통령령" and current_law_name:
-                search_target = current_law_name + " 시행령"
+                    # 새로운 법령 시작
+                    current_law_index = len(results)
+                    current_search_target = ""
+                    current_search_keywords = ""
+                    current_search_reason = ""
+                    break
 
-            return {
-                "needs_additional_search": True,
-                "search_target": search_target,
-                "search_keywords": search_keywords,
-                "search_reason": search_reason,
-                "full_result": result,
-            }
-        else:
-            return {"needs_additional_search": False, "full_result": result}
+            # 검색 대상, 키워드, 이유 파싱
+            if "검색 대상:" in line:
+                current_search_target = line.split("검색 대상:")[1].strip()
+            elif "검색 키워드:" in line:
+                current_search_keywords = line.split("검색 키워드:")[1].strip()
+            elif "검색 이유:" in line:
+                current_search_reason = line.split("검색 이유:")[1].strip()
+
+        # 마지막 법령의 결과 저장
+        if current_law_index >= 0 and current_law_index < len(lines):
+            if "추가 검색 필요" in lines[current_law_index]:
+                results.append(
+                    {
+                        "needs_additional_search": True,
+                        "search_target": current_search_target
+                        or (current_law_name + " 시행령" if current_law_name else ""),
+                        "search_keywords": current_search_keywords,
+                        "search_reason": current_search_reason
+                        or "법령 내용에서 추가 검색이 필요함",
+                        "full_result": lines[current_law_index],
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "needs_additional_search": False,
+                        "full_result": lines[current_law_index],
+                    }
+                )
+
+        # 결과 개수가 청크 개수와 맞지 않으면 기본값으로 채움
+        while len(results) < len(law_contents):
+            results.append(
+                {
+                    "needs_additional_search": False,
+                    "full_result": "기본값",
+                }
+            )
+
+        return results[: len(law_contents)]
 
     except Exception as e:
         print(f"추가 검색 필요성 판단 오류: {e}")
-        return {
-            "needs_additional_search": False,
-            "error": f"판단 중 오류가 발생했습니다: {str(e)}",
-        }
+        return [
+            {
+                "needs_additional_search": False,
+                "error": f"판단 중 오류가 발생했습니다: {str(e)}",
+            }
+        ] * len(law_contents)
 
 
 def collect_additional_search_requirements(
@@ -234,6 +352,7 @@ def collect_additional_search_requirements(
     requirements_list: List[Dict],
 ) -> None:
     """추가 검색 요구사항을 수집하고 중복을 제거합니다."""
+    print("🔍 ADDITIONAL SEARCH RESULT-->", additional_search_result)
     if additional_search_result.get("needs_additional_search", False):
         search_target = additional_search_result.get("search_target", "")
         search_keywords = additional_search_result.get("search_keywords", "")
@@ -241,7 +360,7 @@ def collect_additional_search_requirements(
         if search_target and search_keywords:
             # 중복 검사를 위한 키 생성
             search_key = f"{search_target}:{search_keywords}"
-            print("🔍 COLLECT ADDITIONAL SEARCH REQUIREMENTS-->", search_key)
+            print("🔍 추가로 검색해야 할 법령-->", search_key)
             # 기존 요구사항에서 동일한 키가 있는지 확인
             existing_req = None
             for req in requirements_list:
@@ -275,25 +394,34 @@ def perform_batch_additional_searches(
 
     print(f"🔍 PERFORMING BATCH SEARCHES FOR {len(requirements_list)} REQUIREMENTS")
 
-    for i, req in enumerate(requirements_list, 1):
-        additional_query = f"{req["search_target"]} {req["search_keywords"]}"
-        additional_search_result_data = search_and_analyze_laws(
-            additional_query, user_question
-        )
-        # print("🔍 ADDITIONAL SEARCH RESULT DATA-->", additional_search_result_data)
+    # 배치 단위로 추가 검색 수행
+    batch_size = 10  # 배치 크기를 10으로 통일
+    for i in range(0, len(requirements_list), batch_size):
+        batch_requirements = requirements_list[i : i + batch_size]
 
-        if additional_search_result_data["error"] is None:
-            results.append(
-                {
-                    "search_target": req["search_target"],
-                    "search_keywords": req["search_keywords"],
-                    # "search_reason": req["search_reason"],
-                    # "original_laws": req["original_laws"],
-                    "additional_law_content": additional_search_result_data["results"],
-                }
+        for req in batch_requirements:
+            additional_query = f"{req["search_target"]} {req["search_keywords"]}"
+            additional_search_result_data = search_and_analyze_laws(
+                additional_query, user_question, batch_size=10
             )
-        else:
-            print(f"🔍 BATCH SEARCH FAILED: {additional_search_result_data['error']}")
+            # print("🔍 ADDITIONAL SEARCH RESULT DATA-->", additional_search_result_data)
+
+            if additional_search_result_data["error"] is None:
+                results.append(
+                    {
+                        "search_target": req["search_target"],
+                        "search_keywords": req["search_keywords"],
+                        # "search_reason": req["search_reason"],
+                        # "original_laws": req["original_laws"],
+                        "additional_law_content": additional_search_result_data[
+                            "results"
+                        ],
+                    }
+                )
+            else:
+                print(
+                    f"🔍 BATCH SEARCH FAILED: {additional_search_result_data['error']}"
+                )
 
     return results
 
@@ -315,19 +443,31 @@ def find_relevant_laws(user_question: str, max_search_count: int = 10) -> str:
         relevant_laws = search_and_analyze_laws(user_question, user_question)
         print("🔍 RELEVANT LAWS 1-->", [o[:40] for o in relevant_laws["results"]])
 
-        for law_content in relevant_laws["results"]:
-            # print("🔍 LAW CONTENT-->", law_content)
-            # 추가 검색 필요성 확인
-            additional_search_result = check_additional_search_needed(
-                law_content, user_question, current_law_name
+        # 배치 단위로 추가 검색 필요성 확인
+        batch_size = 10
+        for i in range(0, len(relevant_laws["results"]), batch_size):
+            batch = relevant_laws["results"][i : i + batch_size]
+
+            print(
+                f"🔍 추가 검색 필요성 확인 대상 (배치 {i//batch_size + 1})-->",
+                len(batch),
+                "개 청크",
             )
 
-            # 추가 검색이 필요한 경우 요구사항 수집
-            collect_additional_search_requirements(
-                law_content,
-                additional_search_result,
-                additional_search_requirements,
+            # 배치 전체를 한번에 추가 검색 필요성 확인
+            additional_search_results = check_additional_search_needed(
+                batch, user_question, current_law_name
             )
+
+            # 각 청크별 결과에 따라 요구사항 수집
+            for j, (law_content, additional_search_result) in enumerate(
+                zip(batch, additional_search_results)
+            ):
+                collect_additional_search_requirements(
+                    law_content,
+                    additional_search_result,
+                    additional_search_requirements,
+                )
 
         print("🔍 RELEVANT LAWS 2-->", [o[:40] for o in relevant_laws["results"]])
         print("🔍 ADDITIONAL SEARCH REQUIREMENTS-->", additional_search_requirements)
