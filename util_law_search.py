@@ -3,24 +3,21 @@ import requests
 from typing import List, Dict, Any, Callable
 import inspect
 import os
-from dotenv import load_dotenv
 import psycopg2
 import re
 from util_tool_call import SimpleToolCaller
 from prompts import generate_prompt
 from db_utils import db_manager
 
-# .env 파일 로드
-load_dotenv()
-
 
 # 법령 검색 클래스
 class LawSearcher:
     def __init__(self):
-        self.search_results = []
-        self.search_results_dict = {}
-        self.current_index = 0
-        self.last_query = None
+        # self.search_results = []
+        # self.search_results_dict = {}
+        # self.current_index = 0
+        # self.last_query = None
+        pass
 
     def extract_first_number(self, text):
         if text == "조항 번호 없음":
@@ -93,11 +90,11 @@ class LawSearcher:
         # 결과를 리스트로 변환
         keyword = keyword.split(",")
         keyword = [keyword.strip() for keyword in keyword]
-        # 키워드 중 법률명이 포함된 경우 제거
+        # 키워드 중 법률명 또는 "대통령령"이 포함된 경우 제거
         keyword = [
             keyword
             for keyword in keyword
-            if keyword not in law_name_parsed[0]["법률명"]
+            if keyword not in law_name_parsed[0]["법률명"] and keyword != "대통령령"
         ]
         print("🔍 KEYWORD-->", keyword)
 
@@ -145,7 +142,7 @@ def check_law_sufficiency(law_content: str, user_question: str) -> str:
 
 
 def check_additional_search_needed(
-    law_content: str, user_question: str
+    law_content: str, user_question: str, current_law_name: str = ""
 ) -> Dict[str, Any]:
     """법령 내용을 분석하여 사용자 질문에 답하기 위해 추가 검색이 필요한지 판단합니다."""
     # LLM을 사용하여 추가 검색 필요성 판단
@@ -173,6 +170,14 @@ def check_additional_search_needed(
                     search_keywords = line.split("검색 키워드:")[1].strip()
                 elif "검색 이유:" in line:
                     search_reason = line.split("검색 이유:")[1].strip()
+
+            # "대통령령"을 현재 법에 따른 시행령으로 변환
+            if search_target == "대통령령" and current_law_name:
+                # 현재 법령명에서 "법"을 제거하고 "시행령"을 추가
+                if current_law_name.endswith("법"):
+                    search_target = current_law_name + " 시행령"
+                else:
+                    search_target = current_law_name + " 시행령"
 
             return {
                 "needs_additional_search": True,
@@ -377,6 +382,13 @@ def find_relevant_laws(user_question: str, max_search_count: int = 10) -> str:
     search_count = 0
 
     try:
+        # 현재 법령명 추출
+        messages_law_name = generate_prompt("law_name_extraction", query=user_question)
+        caller = SimpleToolCaller()
+        law_name_result = caller.chat(messages_law_name, with_tools=False)
+        law_name_parsed = LawSearcher().parse_law_results(law_name_result)
+        current_law_name = law_name_parsed[0]["법률명"] if law_name_parsed else ""
+
         law_result_ids = LawSearcher().search_laws(user_question)
         print("🔍 LAW RESULT IDS-->", law_result_ids)
 
@@ -412,7 +424,7 @@ def find_relevant_laws(user_question: str, max_search_count: int = 10) -> str:
 
             # 추가 검색 필요성 검사
             additional_search_result = check_additional_search_needed(
-                law_content["results"], user_question
+                law_content["results"], user_question, current_law_name
             )
             # print("🔍 ADDITIONAL SEARCH RESULT-->", additional_search_result)
 
