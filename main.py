@@ -28,8 +28,8 @@ TOOLS = [
                     },
                     "max_search_count": {
                         "type": "integer",
-                        "description": "최대 검색할 법령 수 (기본값: 5)",
-                        "default": 5,
+                        "description": "최대 검색할 법령 수 (기본값: 30)",
+                        "default": 30,
                     },
                 },
                 "required": ["user_question"],

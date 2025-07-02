@@ -427,7 +427,7 @@ def perform_batch_additional_searches(
     return results
 
 
-def find_relevant_laws(user_question: str, max_search_count: int = 10) -> str:
+def find_relevant_laws(user_question: str, max_search_count: int = 30) -> str:
     """주어진 질문과 관련된 법령을 찾고 충분성을 검사하여 관련된 법령을 추려냅니다."""
     additional_search_requirements = []  # 추가 검색 요구사항을 모으는 리스트
     additional_search_results = []
@@ -482,32 +482,28 @@ def find_relevant_laws(user_question: str, max_search_count: int = 10) -> str:
             )
         # print("🔍 ADDITIONAL SEARCH RESULTS-->", additional_search_results)
 
-        # 결과 정리
-        result_summary = "=== 법령 검색 및 분석 결과 ===\n\n"
+        # 결과 정리 - 모든 법령 내용을 하나로 합침
+        all_law_contents = []
 
-        if relevant_laws:
-            result_summary += "=== 관련 법령들 ===\n"
-            for i, law in enumerate(relevant_laws, 1):
-                result_summary += f"\n법령 {i}:\n"
-                result_summary += f"내용: {law}\n"
-        else:
-            result_summary += "⚠️ 충분한 법령을 찾지 못했습니다.\n"
+        # 기본 검색 결과 추가
+        if relevant_laws["results"]:
+            all_law_contents.extend(relevant_laws["results"])
 
+        # 추가 검색 결과 추가
         if additional_search_results:
-            result_summary += "\n=== 추가 검색 결과 ===\n"
-            for i, result in enumerate(additional_search_results, 1):
-                result_summary += f"\n추가 검색 {i}:\n"
-                result_summary += f"검색 대상: {result['search_target']}\n"
-                result_summary += f"검색 키워드: {result['search_keywords']}\n"
+            for result in additional_search_results:
+                if (
+                    "additional_law_content" in result
+                    and result["additional_law_content"]
+                ):
+                    all_law_contents.extend(result["additional_law_content"])
 
-                if "error" in result:
-                    pass
-                else:
-                    result_summary += (
-                        f"추가 검색 결과 내용: {result['additional_law_content']}...\n"
-                    )
-
-        return result_summary
+        # 모든 법령 내용을 하나의 문자열로 결합
+        if all_law_contents:
+            combined_result = "\n\n".join(all_law_contents)
+            return combined_result
+        else:
+            return "⚠️ 관련 법령을 찾지 못했습니다."
 
     except Exception as e:
         print(f"법령 검색 중 오류 발생: {e}")
