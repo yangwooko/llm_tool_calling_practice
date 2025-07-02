@@ -65,7 +65,7 @@ class LawSearcher:
         # print("🔍 RESULT LIST-->", result_list)
         return result_list
 
-    def search_laws(self, query: str) -> Dict[str, Any]:
+    def search_laws(self, query: str, k: int = 40) -> Dict[str, Any]:
         """질문에 관련된 법령들을 검색하여 chunk ID 리스트를 반환합니다."""
         # SimpleToolCaller 인스턴스 생성
         caller = SimpleToolCaller()
@@ -74,9 +74,9 @@ class LawSearcher:
         law_name_result = caller.chat(
             generate_prompt("law_name_extraction", query=query), with_tools=False
         )
-        print("🔍 포함된 법령 이름-->", law_name_result)
+        # print("🔍 포함된 법령 이름-->", law_name_result)
         law_name_parsed = self.parse_law_results(law_name_result)
-        print("🔍 법령 이름 파싱-->", law_name_parsed)
+        print("🔍 법령 이름 추출 결과-->", law_name_parsed)
 
         # 질문에서 찾고자 하는 주요 키워드 추출
         keyword = caller.chat(
@@ -102,11 +102,10 @@ class LawSearcher:
 
         # execute sql
         if law_name_no_space == "해당없음":
-            sql_query = f"""SELECT ch2.id FROM document JOIN collection cl ON document.collection_id = cl.id JOIN chunk ch2 ON ch2.document_id = document.id WHERE cl.usage = 'rag' AND (cl.scenario->>'law_no_ordin' = 'Y')  AND (NOT document.collection_id = 4  AND document.document_meta->>'path' NOT ILIKE '/data/law/ordin/%') AND ((text @@@ '{" ".join(keyword)}')) ORDER BY paradedb.score(ch2.id) desc LIMIT 20;
-            """
+            sql_query = f"""SELECT ch2.id FROM document JOIN collection cl ON document.collection_id = cl.id JOIN chunk ch2 ON ch2.document_id = document.id WHERE cl.usage = 'rag' AND (cl.scenario->>'law_no_ordin' = 'Y')  AND (NOT document.collection_id = 4  AND document.document_meta->>'path' NOT ILIKE '/data/law/ordin/%') AND ((text @@@ '{" ".join(keyword)}')) ORDER BY paradedb.score(ch2.id) DESC LIMIT {k};"""
         else:
-            sql_query = f"""SELECT ch2.id FROM document JOIN collection cl ON document.collection_id = cl.id JOIN chunk ch2 ON ch2.document_id = document.id WHERE cl.usage = 'rag' AND (cl.scenario->>'law_no_ordin' = 'Y')  AND (NOT document.collection_id = 4  AND document.document_meta->>'path' NOT ILIKE '/data/law/ordin/%') AND keyword1='{law_name_no_space}'  AND ((text @@@ '{" ".join(keyword)}')) ORDER BY paradedb.score(ch2.id) desc LIMIT 20;
-            """
+            sql_query = f"""WITH t1 AS (SELECT ch2.id, ch2.keyword1, paradedb.score(ch2.id) AS similarity FROM document JOIN collection cl ON document.collection_id = cl.id JOIN chunk ch2 ON ch2.document_id = document.id WHERE cl.usage = 'rag' AND (cl.scenario->>'law_no_ordin' = 'Y')  AND (NOT document.collection_id = 4  AND document.document_meta->>'path' NOT ILIKE '/data/law/ordin/%') AND ((text @@@ '{" ".join(keyword)}')) OFFSET 0
+            ) SELECT id, similarity FROM t1 WHERE keyword1='{law_name_no_space}' ORDER BY similarity DESC LIMIT {k};"""
 
         return db_manager.execute_query(sql_query)
 
@@ -138,7 +137,7 @@ def check_law_sufficiency(law_contents: List[str], user_question: str) -> List[s
             ),
             with_tools=False,
         )
-        print("🔍 BATCH LAW SUFFICIENCY RESULT-->", result)
+        # print("🔍 BATCH LAW SUFFICIENCY RESULT-->", result)
 
         # 결과 파싱
         results = []
@@ -198,7 +197,7 @@ def search_and_analyze_laws(
 
             # 배치 전체를 한번에 충분성 검사
             sufficiency_results = check_law_sufficiency(batch, user_question)
-            print("🔍 SUFFICIENCY RESULTS-->", sufficiency_results)
+            # print("🔍 SUFFICIENCY RESULTS-->", sufficiency_results)
 
             # 각 청크별 결과에 따라 relevant_laws에 추가
             for j, (law_content, sufficiency_result) in enumerate(
@@ -208,7 +207,7 @@ def search_and_analyze_laws(
                     "충분함" in sufficiency_result
                     or "부분적 충분함" in sufficiency_result
                 ):
-                    print("🔍 ADDING LAW CONTENT-->", law_content)
+                    print("🔍 발견한 내용-->", law_content.split("\n")[0])
                     relevant_laws.append(law_content)
 
         return {"error": None, "results": relevant_laws}
@@ -352,15 +351,17 @@ def collect_additional_search_requirements(
     requirements_list: List[Dict],
 ) -> None:
     """추가 검색 요구사항을 수집하고 중복을 제거합니다."""
-    print("🔍 ADDITIONAL SEARCH RESULT-->", additional_search_result)
+    # print("🔍 ADDITIONAL SEARCH RESULT-->", additional_search_result)
     if additional_search_result.get("needs_additional_search", False):
         search_target = additional_search_result.get("search_target", "")
         search_keywords = additional_search_result.get("search_keywords", "")
 
         if search_target and search_keywords:
+            if search_target == "없음" and search_keywords == "없음":
+                return
             # 중복 검사를 위한 키 생성
             search_key = f"{search_target}:{search_keywords}"
-            print("🔍 추가로 검색해야 할 법령-->", search_key)
+            # print("🔍 추가로 검색해야 할 법령-->", search_key)
             # 기존 요구사항에서 동일한 키가 있는지 확인
             existing_req = None
             for req in requirements_list:
@@ -392,7 +393,7 @@ def perform_batch_additional_searches(
     """여러 추가 검색을 일괄적으로 수행합니다."""
     results = []
 
-    print(f"🔍 PERFORMING BATCH SEARCHES FOR {len(requirements_list)} REQUIREMENTS")
+    # print(f"🔍 PERFORMING BATCH SEARCHES FOR {len(requirements_list)} REQUIREMENTS")
 
     # 배치 단위로 추가 검색 수행
     batch_size = 10  # 배치 크기를 10으로 통일
@@ -441,7 +442,7 @@ def find_relevant_laws(user_question: str, max_search_count: int = 10) -> str:
 
         # search_and_analyze_laws 함수를 활용하여 기본 검색 수행
         relevant_laws = search_and_analyze_laws(user_question, user_question)
-        print("🔍 RELEVANT LAWS 1-->", [o[:40] for o in relevant_laws["results"]])
+        # print("🔍 RELEVANT LAWS 1-->", [o[:40] for o in relevant_laws["results"]])
 
         # 배치 단위로 추가 검색 필요성 확인
         batch_size = 10
@@ -449,9 +450,9 @@ def find_relevant_laws(user_question: str, max_search_count: int = 10) -> str:
             batch = relevant_laws["results"][i : i + batch_size]
 
             print(
-                f"🔍 추가 검색 필요성 확인 대상 (배치 {i//batch_size + 1})-->",
+                f"🔍 추가 검색 필요성 확인 (총 {len(relevant_laws['results']) // batch_size + 1}개 배치 중 {i//batch_size + 1}번째)-->",
                 len(batch),
-                "개 청크",
+                "개 텍스트 청크",
             )
 
             # 배치 전체를 한번에 추가 검색 필요성 확인
@@ -469,8 +470,10 @@ def find_relevant_laws(user_question: str, max_search_count: int = 10) -> str:
                     additional_search_requirements,
                 )
 
-        print("🔍 RELEVANT LAWS 2-->", [o[:40] for o in relevant_laws["results"]])
-        print("🔍 ADDITIONAL SEARCH REQUIREMENTS-->", additional_search_requirements)
+        # print("🔍 RELEVANT LAWS 2-->", [o[:40] for o in relevant_laws["results"]])
+        print("🔍 추가 검색할 대상")
+        for req in additional_search_requirements:
+            print("-->", req["search_target"], req["search_keywords"])
 
         # 2단계: 수집된 추가 검색 요구사항들을 일괄 처리
         if additional_search_requirements:

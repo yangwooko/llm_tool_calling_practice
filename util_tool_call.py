@@ -26,7 +26,6 @@ class SimpleToolCaller:
 
     def call_llm(self, messages: List[Dict], tools: List[Dict] = None) -> Dict:
         """LLM API를 호출합니다."""
-        print("🔍 CALL LLM-->", "START")
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -40,7 +39,6 @@ class SimpleToolCaller:
         response = requests.post(
             f"{self.base_url}/chat/completions", headers=headers, json=data
         )
-        print("🔍 CALL LLM-->", "END")
 
         if response.status_code == 200:
             return response.json()
@@ -49,7 +47,7 @@ class SimpleToolCaller:
 
     def execute_tool(self, tool_call: Dict) -> str:
         """도구를 실행합니다."""
-        print("🔧 EXECUTE TOOL-->", tool_call)
+        print("🔧 EXECUTE TOOL-->", tool_call["function"])
 
         function_name = tool_call["function"]["name"]
         arguments = json.loads(tool_call["function"]["arguments"])
